@@ -5,147 +5,106 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 import tempfile
 import os
+import transformers
+from langchain.chains import RetrievalQA
+from langchain.llms import HuggingFacePipeline
 
 def preprocess_text(text):
     """Cleaning and preprocess text for better matching"""
     import re
-    # Remove extra whitespace
-    text = re.sub(r'\s+', ' ', text.strip())
-    # Remove special characters but keep meaningful punctuation
-    text = re.sub(r'[^\w\s.,!?-]', '', text)
+    text = re.sub(r'\s+', ' ', text.strip())  # Remove extra whitespace
+    text = re.sub(r'[^\w\s.,!?-]', '', text)  # Remove special characters
     return text
 
 def process_pdf(uploaded_file, chunk_size=500, chunk_overlap=100):
     try:
-        # Save uploaded file temporarily
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
             tmp_file.write(uploaded_file.getvalue())
             tmp_path = tmp_file.name
 
-        # Load and process the PDF
         loader = PyPDFLoader(tmp_path)
         docs = loader.load()
 
-        # Enhanced text splitting with smaller chunks and more overlap
         text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-            length_function=len,
-            separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
-            is_separator_regex=False
+            chunk_size=chunk_size, chunk_overlap=chunk_overlap, length_function=len,
+            separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""], is_separator_regex=False
         )
         documents = text_splitter.split_documents(docs)
 
-        # Preprocess each document's content
         for doc in documents:
             doc.page_content = preprocess_text(doc.page_content)
 
-        # Initialize embeddings with a better performing model
-        embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-mpnet-base-v2",  # Better model
-            model_kwargs={'device': 'cpu'}
-        )
+        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2", model_kwargs={'device': 'cpu'})
 
-        # Create vector store with more sophisticated distance metrics
-        db = Chroma.from_documents(
-            documents, 
-            embedding=embeddings,
-            collection_metadata={"hnsw:space": "cosine"}  # Use cosine similarity
-        )
-
-        # Clean up temporary file
+        db = Chroma.from_documents(documents, embedding=embeddings)
+        retriever = db.as_retriever()
         os.unlink(tmp_path)
-        
         return db
     except Exception as e:
         st.error(f"Error processing PDF: {str(e)}")
         return None
 
 def perform_search(db, query, k=4):
-    """Enhanced search function with MMR reranking"""
+    """Enhanced search function with RAG integration"""
     try:
-        # Get more results than needed for reranking
-        results = db.similarity_search_with_relevance_scores(
-            query,
-            k=k*2  # Get more results initially
-        )
-        
-        # Filter results based on relevance score
-        threshold = 0.7  # Adjust this threshold based on your needs
-        filtered_results = [
-            doc for doc, score in results 
-            if score > threshold
-        ]
-        
-        # Return top k results after filtering
-        return filtered_results[:k]
+        retriever = db.as_retriever()
+        retrieved_docs = retriever.get_relevant_documents(query)
+        return retrieved_docs[:k]
     except Exception as e:
         st.error(f"Search error: {str(e)}")
         return []
 
+def generate_response(query, retriever):
+    """Use GPT-2 to generate responses using retrieved documents"""
+    try:
+        # Load GPT-2 model
+        model_name = "gpt2"
+        tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
+        model = transformers.AutoModelForCausalLM.from_pretrained(model_name)
+        pipeline = transformers.pipeline("text-generation", model=model, tokenizer=tokenizer, max_new_tokens=20)
+        llm = HuggingFacePipeline(pipeline=pipeline)
+
+        # Create RetrievalQA chain
+        qa_chain = RetrievalQA.from_chain_type(llm=llm, retriever=retriever, chain_type="stuff")
+
+        # Generate response
+        result = qa_chain.run(query)
+        return result
+    except Exception as e:
+        return f"Error generating response: {str(e)}"
+
 def main():
-    st.set_page_config(
-        page_title="Enhanced PDF Analysis",
-        page_icon="📚",
-        layout="wide"
-    )
-    
-    st.title("📚 Enhanced PDF Document Analysis")
+    st.set_page_config(page_title="Enhanced PDF Q&A", page_icon="📚", layout="wide")
+    st.title("📚 PDF Chat with RAG and GPT-2")
     st.write("Upload a PDF and ask questions about its content")
 
-    # Sidebar for advanced settings
     with st.sidebar:
-        st.header("Advanced Settings")
-        chunk_size = st.slider("Chunk Size", 200, 1000, 500, 50,
-                             help="Size of text chunks for processing")
-        chunk_overlap = st.slider("Chunk Overlap", 50, 400, 100, 25,
-                                help="Overlap between chunks")
-        num_results = st.slider("Number of Results", 1, 10, 4,
-                              help="Number of results to display")
+        st.header("Settings")
+        chunk_size = st.slider("Chunk Size", 200, 1000, 500, 50)
+        chunk_overlap = st.slider("Chunk Overlap", 50, 400, 100, 25)
+        num_results = st.slider("Number of Results", 1, 10, 4)
 
-    # Initialize session state
     if 'vector_store' not in st.session_state:
         st.session_state.vector_store = None
 
-    # File upload
     uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
-    
+
     if uploaded_file is not None:
-        # Process PDF if not already processed
         if st.session_state.vector_store is None:
             with st.spinner('Processing PDF...'):
-                st.session_state.vector_store = process_pdf(
-                    uploaded_file,
-                    chunk_size=chunk_size,
-                    chunk_overlap=chunk_overlap
-                )
+                st.session_state.vector_store = process_pdf(uploaded_file, chunk_size, chunk_overlap)
             if st.session_state.vector_store:
                 st.success('PDF processed successfully!')
 
         if st.session_state.vector_store:
-            # Query input with example
-            st.write("Try to be specific in your questions. For example: 'What are the main themes in chapter 3?'")
-            query = st.text_input("Enter your question about the document:")
-            
+            query = st.text_input("Enter your question:")
             if query:
-                with st.spinner('Searching...'):
-                    results = perform_search(
-                        st.session_state.vector_store,
-                        query,
-                        k=num_results
-                    )
-                    
-                    if results:
-                        st.subheader("Search Results")
-                        for i, result in enumerate(results, 1):
-                            with st.expander(f"Result {i}"):
-                                st.markdown(f"**Content:**\n{result.page_content}")
-                                st.markdown("---")
-                                st.markdown(f"**Page:** {result.metadata.get('page', 'N/A')}")
-                    else:
-                        st.warning("No relevant results found. Try rephrasing your question.")
+                with st.spinner('Retrieving and generating response...'):
+                    retriever = st.session_state.vector_store.as_retriever()
+                    response = generate_response(query, retriever)
+                    st.subheader("Generated Response")
+                    st.write(response)
 
-            # Clear button
             if st.button("Clear and Upload New PDF"):
                 st.session_state.clear()
                 st.rerun()
