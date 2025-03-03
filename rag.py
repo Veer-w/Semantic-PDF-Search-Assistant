@@ -16,8 +16,8 @@ import torch
 def preprocess_text(text):
     """Cleaning and preprocess text for better matching"""
     import re
-    text = re.sub(r'\s+', ' ', text.strip())  # Remove extra whitespace
-    text = re.sub(r'[^\w\s.,!?-]', '', text)  # Remove special characters
+    text = re.sub(r'\s+', ' ', text.strip())  #for removing extra whitespace
+    text = re.sub(r'[^\w\s.,!?-]', '', text)  
     return text
 
 def process_pdf(uploaded_file, chunk_size=500, chunk_overlap=100):
@@ -29,7 +29,7 @@ def process_pdf(uploaded_file, chunk_size=500, chunk_overlap=100):
         loader = PyPDFLoader(tmp_path)
         docs = loader.load()
         
-        # Add page numbers to metadata for better context
+        #added pages numbers to metadata for better context
         for i, doc in enumerate(docs):
             doc.metadata["page"] = i + 1
 
@@ -45,7 +45,6 @@ def process_pdf(uploaded_file, chunk_size=500, chunk_overlap=100):
         for doc in documents:
             doc.page_content = preprocess_text(doc.page_content)
 
-        # Use a more powerful embedding model
         embeddings = HuggingFaceEmbeddings(
             model_name="sentence-transformers/all-mpnet-base-v2", 
             model_kwargs={'device': 'cuda' if torch.cuda.is_available() else 'cpu'}
@@ -58,7 +57,7 @@ def process_pdf(uploaded_file, chunk_size=500, chunk_overlap=100):
         st.error(f"Error processing PDF: {str(e)}")
         return None
 
-# Custom retriever with better metadata handling
+#retriever 
 class EnhancedRetriever(BaseRetriever):
     """Enhanced retriever that provides better context management"""
     
@@ -69,11 +68,9 @@ class EnhancedRetriever(BaseRetriever):
         """Get documents relevant to the query with improved handling"""
         docs_with_scores = self.vectorstore.similarity_search_with_score(query, k=self.k)
         
-        # Log retrieval scores for debugging
         for i, (doc, score) in enumerate(docs_with_scores):
             print(f"Document {i} score: {score} - First 50 chars: {doc.page_content[:50]}...")
             
-        # Always return all docs - let the LLM determine relevance
         return [doc for doc, _ in docs_with_scores]
         
     async def _aget_relevant_documents(self, query: str) -> List[Document]:
@@ -83,13 +80,11 @@ class EnhancedRetriever(BaseRetriever):
 def create_ollama_llm(model_name="llama3"):
     """Create an Ollama LLM instance with a specified model"""
     try:
-        # Connect to local Ollama instance
-        # Adjust the base_url if Ollama is not running locally
         llm = Ollama(
             model=model_name,
-            temperature=0.1,  # Low temperature for factual responses
-            num_ctx=4096,     # Large context window
-            base_url="http://localhost:11434"  # Default Ollama URL
+            temperature=0.1,  
+            num_ctx=4096,     
+            base_url="http://localhost:11434"  
         )
         return llm
     except Exception as e:
@@ -100,12 +95,10 @@ def create_ollama_llm(model_name="llama3"):
 def generate_response(query, retriever):
     """Enhanced RAG with better prompting and context integration"""
     try:
-        # Create LLM (using Ollama)
         llm = create_ollama_llm()
         if not llm:
             return "Error: Could not initialize language model. Make sure Ollama is running with llama3 model installed."
         
-        # Improved prompt template with better instructions
         prompt_template = """
         You are a precise and helpful assistant that answers questions based ONLY on the provided context.
         
@@ -131,19 +124,17 @@ def generate_response(query, retriever):
             input_variables=["context", "question"]
         )
         
-        # Create RetrievalQA chain with custom prompt
+        #retrievalQA chain 
         qa_chain = RetrievalQA.from_chain_type(
             llm=llm,
-            chain_type="stuff",  # Simple document concatenation
+            chain_type="stuff",  #document concatenation
             retriever=retriever,
             chain_type_kwargs={"prompt": PROMPT},
-            return_source_documents=True  # Return source docs for citation
+            return_source_documents=True  
         )
         
-        # Execute chain
         result = qa_chain({"query": query})
         
-        # Format response with citation information
         final_response = result["result"]
         source_docs = result.get("source_documents", [])
         
@@ -183,7 +174,7 @@ def main():
         hardware_info = "Using GPU" if torch.cuda.is_available() else "Using CPU"
         st.info(f"Hardware Detection: {hardware_info}")
         
-        # Instructions for Ollama
+        #some instructions for Ollama
         with st.expander("Setup Instructions"):
             st.markdown("""
             1. Install Ollama from [ollama.ai](https://ollama.ai/)
@@ -204,7 +195,7 @@ def main():
                 st.success('PDF processed successfully!')
 
         if st.session_state.vector_store:
-            # Use our enhanced retriever
+            #this one is updated retriever
             retriever = EnhancedRetriever(
                 vectorstore=st.session_state.vector_store,
                 k=search_k
@@ -218,9 +209,8 @@ def main():
                     st.subheader("Generated Response")
                     st.write(response)
                     
-                    # Add option to view retrieved documents
                     with st.expander("View Raw Retrieved Documents"):
-                        # Use the vectorstore directly to get documents with scores for display
+                        
                         docs_with_scores = st.session_state.vector_store.similarity_search_with_score(query, k=search_k)
                         for i, (doc, score) in enumerate(docs_with_scores):
                             st.markdown(f"**Document {i+1} (Page {doc.metadata.get('page', 'unknown')}) - Relevance: {score:.4f}**")
