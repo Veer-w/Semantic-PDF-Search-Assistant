@@ -120,4 +120,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 📧 Contact
 
 Your Name - rohanbansode567@gmail.com
-Project Link: https://github.com/yourusername/semantic-pdf-analyzer
+Project Link: https://github.com/Veer-w/semantic-pdf-analyzer
